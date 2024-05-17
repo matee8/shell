@@ -1,170 +1,125 @@
-#include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
+
 #include "../inc/shell.h"
 
-static inline uint8_t shell_launch(char *const *args);
+static char* sh_readl(void);
+static char** sh_parsel(char *line);
+static uint8_t sh_exec(char **args);
+static uint8_t sh_launch(char **args);
 
-const char *builtin_commands[] = {
+static inline uint8_t sh_cd(char **args);
+static inline uint8_t sh_help(char **args);
+static inline uint8_t sh_exit(char **args);
+
+static const char *builtin_cmds[] = {
     "cd",
     "help",
-    "exit"
+    "exit",
 };
 
-uint8_t (*builtin_functions[]) (char *const *) = {
-    &shell_change_directory,
-    &shell_help,
-    &shell_exit
+static uint8_t (*const builtins[])(char **) = {
+    &sh_cd,
+    &sh_help,
+    &sh_exit,
 };
 
-void shell_loop(void) {
-    char **arguments;
-    char *line;
-    int8_t error_status;
+void 
+sh_loop(void) 
+{
+    int8_t status;
+    char **args, *line;
 
     do {
         fputs("$ ", stdout);
 
-        line = shell_read_line();
-        arguments = shell_parse_line(line);
-        error_status = shell_execute(arguments);
+        line = sh_readl();
+        args = sh_parsel(line);
+        status = sh_exec(args);
 
         free(line);
-        free(arguments);
-
-    } while (error_status == 0);
+        free(args);
+    } while (status == EXIT_SUCCESS);
 }
 
-char *shell_read_line(void) {
-    char *buffer;
-    int32_t buffer_size, position;
-    int16_t c;
-    
-    buffer_size = SHELL_BUFFER_SIZE;
-    position = 0;
-    buffer = malloc(buffer_size * sizeof(char));
+size_t 
+sh_builtins_num(void) 
+{
+    return sizeof(builtin_cmds) / sizeof(char*);
+}
 
-    if (buffer == NULL) {
-        fputs("shell: allocation failed\n", stderr);
+static char* 
+sh_readl(void) 
+{
+    char *line;
+
+    line = malloc(SH_BUF_SIZE * sizeof(char));
+
+    if (fgets(line, SH_BUF_SIZE, stdin) == NULL) {
+        fputs("shell: error reading line\n", stderr);
         exit(EXIT_FAILURE);
+    } else if (feof(stdin)) {
+        exit(EXIT_SUCCESS);
     }
 
-    for (;;) {
-        c = getchar();
+    line[strcspn(line, "\n")] = '\0';
 
-        if (c == EOF || c == '\n') {
-            buffer[position] = '\0';
-            return buffer;
-        } else {
-            buffer[position] = c;
-        }
-
-        position++;
-
-        if (position >= buffer_size) {
-            buffer_size += SHELL_BUFFER_SIZE;
-            buffer = realloc(buffer, buffer_size * sizeof(char));
-
-            if (buffer == NULL) {
-                fputs("shell: allocation failed\n", stderr);
-                exit(EXIT_FAILURE);
-            }
-
-        }
-    }
+    return line;
 }
 
-char **shell_parse_line(char *line) {
-    char **tokens;
-    char *token;
-    int32_t buffer_size, position;
+static char**
+sh_parsel(char *line) 
+{
+    int32_t buf_size, position;
+    char **res, *tmp;
 
-    buffer_size = SHELL_TOKEN_BUFFER_SIZE;
+    buf_size = SH_ARG_BUF_SIZE;
     position = 0;
-    tokens = malloc(buffer_size * sizeof(char*));
+    res = malloc(buf_size * sizeof(char*));
 
-    if (tokens == NULL) {
-        fputs("shell: allocation failed\n", stderr);
-        exit(EXIT_FAILURE);
+    if (res == NULL) {
+        fputs("shell: allocation error\n", stderr);
     }
 
-    token = strtok(line, SHELL_TOKEN_DELIMITER);
-    while (token != NULL) {
-        tokens[position++] = token;
-
-        if (position >= buffer_size) {
-            buffer_size += SHELL_TOKEN_BUFFER_SIZE;
-            tokens = realloc(tokens, buffer_size * sizeof(char*));
-
-            if (tokens == NULL) {
-                fputs("shell: allocation failed\n", stderr);
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        token = strtok(NULL, SHELL_TOKEN_DELIMITER);
+    for (tmp = strtok(line, SH_ARG_DELIMS); tmp != NULL; 
+        tmp = strtok(NULL, SH_ARG_DELIMS)) {
+        res[position++] = tmp;
     }
-    
-    tokens[position] = NULL;
 
-    return tokens;
+    res[position] = NULL;
+
+    return res;
 }
 
 
-uint8_t shell_execute(char *const *args) {
+static uint8_t 
+sh_exec(char **args) 
+{
+    size_t i;
+
     if (args[0] == NULL) {
-        return 1;
+        return EXIT_FAILURE;
     }
 
-    for (size_t i = 0; i < shell_number_of_builtins(); i++) {
-        if (strcmp(args[0], builtin_commands[i]) == 0) {
-            return (*builtin_functions[i])(args);
+    for (i = 0; i < sh_builtins_num(); i++) {
+        if (strcmp(args[0], builtin_cmds[i]) == 0) {
+            return (*builtins[i])(args);
         }
     }
 
-    return shell_launch(args);
+    return sh_launch(args);
 }
 
-size_t shell_number_of_builtins() {
-    return sizeof(builtin_commands) / sizeof(char*);
-}
-
-uint8_t shell_change_directory(char *const *args) {
-    if (args[1] == NULL) {
-        fputs("shell: expected argument to \"cd\"\n", stderr);
-    } else {
-        if (chdir(args[1]) != 0) {
-            fputs("shell: error changing directory\n", stderr);
-        }
-    }
-    return 0;
-}
-
-uint8_t shell_help(char *const *args) {
-    (void)args;
-
-    fputs("Shell\n", stdout);
-    fputs("The following commands are built in:\n", stdout);
-
-    for (size_t i = 0; i < shell_number_of_builtins(); i++) {
-        puts(builtin_commands[i]);
-    }
-
-    return 0;
-}
-
-uint8_t shell_exit(char *const *args) {
-    (void)args;
-    return 1;
-}
-
-static inline uint8_t shell_launch(char *const *args) {
+static uint8_t 
+sh_launch(char **args) 
+{
     int32_t status;
-    pid_t pid, wpid;
+    pid_t pid;
 
     pid = fork();
 
@@ -172,14 +127,53 @@ static inline uint8_t shell_launch(char *const *args) {
         if (execvp(args[0], args) == -1) {
             fputs("shell: error creating child process\n", stderr);
         }
-        exit(EXIT_FAILURE);
+        exit(EXIT_SUCCESS);
     } else if (pid < 0) {
         fputs("shell: error creating child process\n", stderr);
     } else {
         do {
-            wpid = waitpid(pid, &status, WUNTRACED);
+            waitpid(pid, &status, WUNTRACED);
         } while (!WIFEXITED(status) && !WIFSIGNALED(status));
     }
 
-    return 0;
+    return EXIT_SUCCESS;
+}
+
+static inline uint8_t 
+sh_cd(char **args) 
+{
+    if (args[1] == NULL) {
+        fputs("shell: expected argument to \"cd\"\n", stderr);
+    }
+
+    if (chdir(args[1]) != EXIT_SUCCESS) {
+        fputs("shell: error changing directory\n", stderr);
+    }
+
+    return EXIT_SUCCESS;
+}
+
+static inline uint8_t 
+sh_help(char **args) 
+{
+    size_t i;
+
+    (void)args;
+
+    fputs("Shell\n", stdout);
+    fputs("The following commands are built in:\n", stdout);
+
+    for (i = 0; i < sh_builtins_num(); i++) {
+        puts("\t");
+        puts(builtin_cmds[i]);
+    }
+
+    return EXIT_SUCCESS;
+}
+
+static inline 
+uint8_t sh_exit(char **args) 
+{
+    (void)args;
+    return EXIT_FAILURE;
 }
