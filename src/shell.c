@@ -23,7 +23,7 @@ static const char *builtin_cmds[] = {
     "exit",
 };
 
-static uint8_t (*const builtins[])(char **) = {
+static uint8_t (*builtins[])(char **) = {
     &sh_cd,
     &sh_help,
     &sh_exit,
@@ -75,23 +75,20 @@ sh_readl(void)
 static char**
 sh_parsel(char *line) 
 {
-    int32_t buf_size, position;
+    int32_t position;
     char **res, *tmp;
 
-    buf_size = SH_ARG_BUF_SIZE;
     position = 0;
-    res = malloc(buf_size * sizeof(char*));
+    res = malloc(SH_BUF_SIZE * sizeof(char*));
 
     if (res == NULL) {
         fputs("shell: allocation error\n", stderr);
     }
 
-    for (tmp = strtok(line, SH_ARG_DELIMS); tmp != NULL; 
+    for (tmp = strtok(line, SH_ARG_DELIMS); tmp != NULL && position < SH_ARG_COUNT; 
         tmp = strtok(NULL, SH_ARG_DELIMS)) {
         res[position++] = tmp;
     }
-
-    res[position] = NULL;
 
     return res;
 }
@@ -164,8 +161,9 @@ sh_help(char **args)
     fputs("The following commands are built in:\n", stdout);
 
     for (i = 0; i < sh_builtins_num(); i++) {
-        puts("\t");
-        puts(builtin_cmds[i]);
+        fputs("\t", stdout);
+        fputs(builtin_cmds[i], stdout);
+        fputs("\n", stdout);
     }
 
     return EXIT_SUCCESS;
